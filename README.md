@@ -533,15 +533,13 @@ MIT License - See LICENSE file for details
 ## 📧 Contact
 
 For questions or support:
-- Create an issue on GitHub
-- Email: [your-email@example.com]
+- Email: [huleadarsh1524@gmail.com]
 
 ---
 
 ## 🙏 Acknowledgments
 
 - FlytBase Robotics for the assignment
-- Claude AI for development assistance
 - Open source community for libraries used
 
 ---
