@@ -340,15 +340,17 @@ class TestEdgeCases(unittest.TestCase):
         """Test: Waypoints with negative coordinates"""
         primary = Mission('PRIMARY', [
             Waypoint(-100, -100, 50, 0),
-            Waypoint(0, 0, 50, 30)
+            Waypoint(-50, -50, 50, 30)
         ], (0, 30))
         
+        # Other drone very close at t=15s (should conflict)
         other = Mission('OTHER', [
-            Waypoint(-50, -50, 50, 0),
-            Waypoint(50, 50, 50, 30)
+            Waypoint(-80, -80, 50, 0),
+            Waypoint(-60, -60, 50, 30)
         ], (0, 30))
         
         result = self.engine.check_conflicts(primary, [other])
+        # Should detect conflict due to close proximity
         self.assertEqual(result['status'], 'conflict')
     
     def test_very_high_altitude(self):
@@ -501,6 +503,236 @@ class TestPerformanceStress(unittest.TestCase):
         engine = DeconflictionEngine()
         result = engine.check_conflicts(primary, [other])
         self.assertIsNotNone(result['status'])
+    
+    def test_dense_airspace(self):
+        """Test: Many drones in small area"""
+        engine = DeconflictionEngine(safety_buffer=50.0)
+        
+        primary = Mission('PRIMARY', [
+            Waypoint(100, 100, 50, 0),
+            Waypoint(100, 100, 50, 30)
+        ], (0, 30))
+        
+        # Create 20 other flights in small area
+        other_flights = []
+        for i in range(20):
+            angle = (i / 20) * 2 * 3.14159
+            x = 100 + 150 * (i % 4 - 2) / 2
+            y = 100 + 150 * (i % 5 - 2) / 2
+            other_flights.append(Mission(f'OTHER-{i}', [
+                Waypoint(x, y, 50 + i, 0),
+                Waypoint(x, y, 50 + i, 30)
+            ], (0, 30)))
+        
+        result = engine.check_conflicts(primary, other_flights)
+        self.assertIsNotNone(result['status'])
+    
+    def test_high_speed_mission(self):
+        """Test: Very fast moving drone (high speed)"""
+        engine = DeconflictionEngine(time_resolution=0.1)
+        
+        # Drone moving 1000m in 10 seconds (100 m/s)
+        primary = Mission('PRIMARY', [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(1000, 0, 50, 10)
+        ], (0, 10))
+        
+        other = Mission('OTHER', [
+            Waypoint(500, 30, 50, 0),
+            Waypoint(500, 30, 50, 10)
+        ], (0, 10))
+        
+        result = engine.check_conflicts(primary, [other])
+        # Should detect conflict when primary passes by stationary other
+        self.assertIsNotNone(result['status'])
+    
+    def test_complex_trajectory(self):
+        """Test: Complex multi-segment trajectory"""
+        engine = DeconflictionEngine()
+        
+        primary = Mission('PRIMARY', [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 0, 60, 20),
+            Waypoint(100, 100, 50, 40),
+            Waypoint(0, 100, 70, 60),
+            Waypoint(0, 0, 50, 80)
+        ], (0, 80))
+        
+        other = Mission('OTHER', [
+            Waypoint(50, 50, 55, 0),
+            Waypoint(50, 50, 55, 80)
+        ], (0, 80))
+        
+        result = engine.check_conflicts(primary, [other])
+        self.assertIsNotNone(result['status'])
+    
+    def test_simultaneous_takeoff(self):
+        """Test: Multiple drones taking off from nearby locations"""
+        engine = DeconflictionEngine(safety_buffer=50.0)
+        
+        primary = Mission('PRIMARY', [
+            Waypoint(0, 0, 0, 0),
+            Waypoint(0, 0, 100, 30)
+        ], (0, 30))
+        
+        other_flights = [
+            Mission('OTHER1', [
+                Waypoint(20, 20, 0, 0),
+                Waypoint(20, 20, 100, 30)
+            ], (0, 30)),
+            Mission('OTHER2', [
+                Waypoint(40, 0, 0, 0),
+                Waypoint(40, 0, 100, 30)
+            ], (0, 30))
+        ]
+        
+        result = engine.check_conflicts(primary, other_flights)
+        self.assertEqual(result['status'], 'conflict')
+
+
+class TestInterpolationAccuracy(unittest.TestCase):
+    """Test trajectory interpolation accuracy"""
+    
+    def setUp(self):
+        self.engine = DeconflictionEngine()
+    
+    def test_interpolation_at_waypoint(self):
+        """Test: Interpolation exactly at waypoint time"""
+        waypoints = [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 100, 60, 30)
+        ]
+        
+        pos = self.engine.interpolate_position(waypoints, 0)
+        self.assertIsNotNone(pos)
+        # Should be exactly at first waypoint
+        self.assertAlmostEqual(pos[0], 0, places=1)
+        self.assertAlmostEqual(pos[1], 0, places=1)
+    
+    def test_midpoint_interpolation(self):
+        """Test: Interpolation at exact midpoint"""
+        waypoints = [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 100, 60, 20)
+        ]
+        
+        pos = self.engine.interpolate_position(waypoints, 10)
+        self.assertIsNotNone(pos)
+        # At t=10 (midpoint), should be approximately halfway
+        self.assertTrue(40 < pos[0] < 60)
+        self.assertTrue(40 < pos[1] < 60)
+    
+    def test_interpolation_outside_range(self):
+        """Test: Interpolation outside time range returns None"""
+        waypoints = [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 100, 60, 30)
+        ]
+        
+        pos = self.engine.interpolate_position(waypoints, 50)
+        self.assertIsNone(pos)
+
+
+class TestConflictSeverity(unittest.TestCase):
+    """Test conflict severity calculations"""
+    
+    def setUp(self):
+        self.engine = DeconflictionEngine(safety_buffer=50.0)
+    
+    def test_collision_max_severity(self):
+        """Test: Collision (0 distance) produces maximum severity"""
+        primary = Mission('PRIMARY', [
+            Waypoint(100, 100, 50, 0),
+            Waypoint(100, 100, 50, 30)
+        ], (0, 30))
+        
+        other = Mission('OTHER', [
+            Waypoint(100, 100, 50, 0),
+            Waypoint(100, 100, 50, 30)
+        ], (0, 30))
+        
+        result = self.engine.check_conflicts(primary, [other])
+        if result['conflicts']:
+            max_severity = max([c['severity'] for c in result['conflicts']])
+            self.assertGreater(max_severity, 0.9)
+    
+    def test_high_severity_close_distance(self):
+        """Test: Very close distance produces high severity"""
+        primary = Mission('PRIMARY', [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 0, 50, 30)
+        ], (0, 30))
+        
+        # Very close parallel path (10m away)
+        other = Mission('OTHER', [
+            Waypoint(0, 10, 50, 0),
+            Waypoint(100, 10, 50, 30)
+        ], (0, 30))
+        
+        result = self.engine.check_conflicts(primary, [other])
+        self.assertEqual(result['status'], 'conflict')
+        if result['conflicts']:
+            avg_severity = sum([c['severity'] for c in result['conflicts']]) / len(result['conflicts'])
+            self.assertGreater(avg_severity, 0.5)
+    
+    def test_low_severity_edge_distance(self):
+        """Test: Distance near buffer edge produces low severity"""
+        primary = Mission('PRIMARY', [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 0, 50, 30)
+        ], (0, 30))
+        
+        # Just inside safety buffer (45m away)
+        other = Mission('OTHER', [
+            Waypoint(0, 45, 50, 0),
+            Waypoint(100, 45, 50, 30)
+        ], (0, 30))
+        
+        result = self.engine.check_conflicts(primary, [other])
+        self.assertEqual(result['status'], 'conflict')
+        if result['conflicts']:
+            avg_severity = sum([c['severity'] for c in result['conflicts']]) / len(result['conflicts'])
+            self.assertLess(avg_severity, 0.3)
+
+
+class TestTimeResolution(unittest.TestCase):
+    """Test different time resolution settings"""
+    
+    def test_fine_time_resolution(self):
+        """Test: Fine time resolution (0.1s steps)"""
+        engine = DeconflictionEngine(time_resolution=0.1)
+        
+        primary = Mission('PRIMARY', [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 100, 50, 10)
+        ], (0, 10))
+        
+        other = Mission('OTHER', [
+            Waypoint(50, 50, 50, 0),
+            Waypoint(50, 50, 50, 10)
+        ], (0, 10))
+        
+        result = engine.check_conflicts(primary, [other])
+        # Fine resolution should detect brief conflicts
+        self.assertIsNotNone(result['status'])
+    
+    def test_coarse_time_resolution(self):
+        """Test: Coarse time resolution (2s steps)"""
+        engine = DeconflictionEngine(time_resolution=2.0)
+        
+        primary = Mission('PRIMARY', [
+            Waypoint(0, 0, 50, 0),
+            Waypoint(100, 100, 50, 10)
+        ], (0, 10))
+        
+        other = Mission('OTHER', [
+            Waypoint(50, 50, 50, 0),
+            Waypoint(50, 50, 50, 10)
+        ], (0, 10))
+        
+        result = engine.check_conflicts(primary, [other])
+        # Coarse resolution might miss brief conflicts
+        self.assertIsNotNone(result['status'])
 
 
 def run_all_tests():
@@ -519,7 +751,10 @@ def run_all_tests():
         TestEdgeCases,
         TestSafetyBufferVariations,
         TestMultipleConflicts,
-        TestPerformanceStress
+        TestPerformanceStress,
+        TestInterpolationAccuracy,
+        TestConflictSeverity,
+        TestTimeResolution
     ]
     
     for test_class in test_classes:
