@@ -1,0 +1,22 @@
+# Core dependencies
+numpy>=1.21.0
+scipy>=1.7.0
+matplotlib>=3.4.0
+
+# Optional: For enhanced visualizations
+seaborn>=0.11.0
+
+# Optional: For distributed systems (production)
+redis>=4.0.0
+kafka-python>=2.0.0
+
+# Development dependencies
+pytest>=7.0.0
+pytest-cov>=3.0.0
+black>=22.0.0
+flake8>=4.0.0
+mypy>=0.950
+
+# Documentation
+sphinx>=4.5.0
+sphinx-rtd-theme>=1.0.0
